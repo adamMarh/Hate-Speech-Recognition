@@ -3,7 +3,7 @@
 ## How to run the project
 
 ```bash
-conda create -n hate python=3.8 -y
+conda create -n hate python=3.8.18 -y
 ```
 
 ```bash
