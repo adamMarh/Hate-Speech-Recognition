@@ -1,5 +1,16 @@
 # Hate-Speech-Recognition
 
+
+
+## Project Workflow
+- constants
+- config_entity
+- artifact_entity
+- components
+- pipeline
+- app.py
+
+
 ## How to run the project
 
 ```bash
@@ -14,3 +25,10 @@ conda activate hate
 pip install -r requirements.txt
 ```
 
+# Gcloud configuration
+https://cloud.google.com/sdk/docs/install#linux
+
+
+```bash
+gcloud init
+```
