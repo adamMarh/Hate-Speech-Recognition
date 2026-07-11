@@ -25,6 +25,10 @@ conda activate hate
 pip install -r requirements.txt
 ```
 
+```bash
+python app.py
+```
+
 # Gcloud configuration
 https://cloud.google.com/sdk/docs/install#linux
 

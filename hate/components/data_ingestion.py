@@ -4,6 +4,7 @@ from zipfile import ZipFile
 from hate.logger import logging
 from hate.exception import CustomException
 from hate.configuration.gcloud_syncer import GcloudSync
+from hate.constants import DATA_DIR, DATA_INGESTION_IMBALANCE_DATA, DATA_INGESTION_RAW_DATA
 from hate.entity.config_entity import DataIngestionConfig
 from hate.entity.artifact_entity import DataIngestionArtifacts
 
@@ -12,6 +13,16 @@ class DataIngestion:
     def __init__(self, data_ingestion_config : DataIngestionConfig):
         self.data_ingestion_config = data_ingestion_config
         self.gcloud = GcloudSync()
+
+    def _local_dataset_paths(self):
+        dataset_dir = os.path.join(os.getcwd(), DATA_DIR, "dataset")
+        imbalance_data_file_path = os.path.join(dataset_dir, DATA_INGESTION_IMBALANCE_DATA)
+        raw_data_file_path = os.path.join(dataset_dir, DATA_INGESTION_RAW_DATA)
+
+        if os.path.exists(imbalance_data_file_path) and os.path.exists(raw_data_file_path):
+            return imbalance_data_file_path, raw_data_file_path
+
+        return None
 
     def get_data_from_gcloud(self) -> None:
         try:
@@ -23,7 +34,7 @@ class DataIngestion:
                                                 )
             logging.info("Exit the get_data_from_gcloud method of DataIngestion class")
         except Exception as e:
-            raise CustomException(e, sys) from e
+                                                raise CustomException(e, sys) from e
 
     def unzip_and_clean(self):
         logging.info("Entered the unzip_and_clean method of DataIngestion class")
@@ -39,10 +50,22 @@ class DataIngestion:
         logging.info("Entered the initiate_data_ingestion method of DataIngestio class")
 
         try:
-            self.get_data_from_gcloud()
-            logging.info("Fetched data from the gcloud bucket")
-            imbalance_data_file_path, raw_data_file_path = self.unzip_and_clean()
-            
+            try:
+                self.get_data_from_gcloud()
+                logging.info("Fetched data from the gcloud bucket")
+                imbalance_data_file_path, raw_data_file_path = self.unzip_and_clean()
+            except Exception as gcloud_error:
+                logging.warning(
+                    "Gcloud ingestion failed, falling back to local dataset files: %s",
+                    gcloud_error,
+                )
+                local_dataset_paths = self._local_dataset_paths()
+                if local_dataset_paths is None:
+                    raise
+
+                logging.info("Using local dataset files bundled with the repository")
+                imbalance_data_file_path, raw_data_file_path = local_dataset_paths
+
             data_ingestion_artifacts = DataIngestionArtifacts(
                 imbalance_data_file_path,
                 raw_data_file_path
