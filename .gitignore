@@ -208,3 +208,6 @@ __marimo__/
 
 
 artifacts/*
+
+#tokenizer
+tokenizer.pickle
