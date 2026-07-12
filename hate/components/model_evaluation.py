@@ -55,7 +55,7 @@ class ModelEvaluation:
             print(x_test)
             y_test = pd.read_csv(self.model_trainer_artifacts.y_test_path, index_col=0)
             
-            with open('tokenizer.picke', 'rb') as handle:
+            with open('tokenizer.pickle', 'rb') as handle:
                 tokenizer = pickle.load(handle)
             
             load_model = keras.models.load_model(self.model_trainer_artifacts.trained_model_path)
