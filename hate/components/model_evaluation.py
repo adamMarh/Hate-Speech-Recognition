@@ -28,25 +28,85 @@ class ModelEvaluation:
         self.model_trainer_artifacts = model_trainer_artifacts
         self.data_transformation_artifacts = data_transformation_artifacts
         self.gcloud = GcloudSync()
+        self.tokenizer_path = 'tokenizer.pickle'
+        self.model_name = self.model_evaluation_config.MODEL_NAME
+        self.best_model_dir = self.model_evaluation_config.BEST_MODEL_DIR_PATH
+
+    def get_local_best_model_path(self) -> str:
+        candidate_paths = []
+        artifacts_root = 'artifacts'
+        if os.path.isdir(artifacts_root):
+            for root, _, files in os.walk(artifacts_root):
+                if self.model_name in files and (root.endswith('best_model') or root.endswith('ModelTrainerArtifacts')):
+                    candidate_paths.append(os.path.join(root, self.model_name))
+
+        if candidate_paths:
+            candidate_paths.sort(key=os.path.getmtime, reverse=True)
+            return candidate_paths[0]
+
+        return ''
+
+    def get_local_tokenizer_path(self) -> str:
+        if os.path.exists(self.tokenizer_path):
+            return self.tokenizer_path
+
+        candidate_paths = []
+        artifacts_root = 'artifacts'
+        if os.path.isdir(artifacts_root):
+            for root, _, files in os.walk(artifacts_root):
+                if 'x_train.csv' in files and root.endswith('ModelTrainerArtifacts'):
+                    candidate_paths.append(os.path.join(root, 'x_train.csv'))
+
+        if not candidate_paths:
+            return ''
+
+        candidate_paths.sort(key=os.path.getmtime, reverse=True)
+        training_frame = pd.read_csv(candidate_paths[0], index_col=False)
+        if 'tweet' in training_frame.columns:
+            texts = training_frame['tweet'].fillna('').astype(str)
+        else:
+            texts = training_frame.iloc[:, -1].fillna('').astype(str)
+
+        tokenizer = Tokenizer(num_words=MAX_WORDS)
+        tokenizer.fit_on_texts(texts)
+        with open(self.tokenizer_path, 'wb') as handle:
+            pickle.dump(tokenizer, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        return self.tokenizer_path
         
     def get_best_model_from_gcloud(self) -> str:
         try:
             logging.info("Enteres the get_best_model_from_gcloud method from ModelEvaluation")
-            os.makedirs(self.model_evaluation_config.BEST_MODEL_DIR_PATH, exist_ok= True)
+            os.makedirs(self.best_model_dir, exist_ok= True)
             
             self.gcloud.sync_folder_from_gcloud(self.model_evaluation_config.BUCKET_NAME,
                                                 self.model_evaluation_config.MODEL_NAME,
-                                                self.model_evaluation_config.BEST_MODEL_DIR_PATH)
+                                                self.best_model_dir)
             
-            best_model_path = os.path.join(self.model_evaluation_config.BEST_MODEL_DIR_PATH,
-                                           self.model_evaluation_config.MODEL_NAME)
+            best_model_path = os.path.join(self.best_model_dir, self.model_evaluation_config.MODEL_NAME)
             
             logging.info("Exited the get_best_model_from_gcloud method")
             return best_model_path
         except Exception as e:
             raise CustomException(e, sys) from e
+
+    def resolve_best_model_path(self) -> str:
+        try:
+            return self.get_best_model_from_gcloud()
+        except Exception as gcloud_error:
+            logging.warning(
+                "Falling back to local best model because GCS fetch failed: %s",
+                gcloud_error,
+            )
+            local_best_model_path = self.get_local_best_model_path()
+            if local_best_model_path:
+                return local_best_model_path
+
+            raise CustomException(
+                FileNotFoundError("No best model is available in GCS or locally."),
+                sys,
+            ) from gcloud_error
     
-    def evaluate(self):
+    def evaluate(self, model_path: str):
         try:
             logging.info("Entering the evaluate method of the ModelEvaluation class")
             print(self.model_trainer_artifacts.x_test_path)
@@ -55,10 +115,14 @@ class ModelEvaluation:
             print(x_test)
             y_test = pd.read_csv(self.model_trainer_artifacts.y_test_path, index_col=0)
             
-            with open('tokenizer.pickle', 'rb') as handle:
+            tokenizer_path = self.get_local_tokenizer_path()
+            if not tokenizer_path:
+                raise FileNotFoundError("No tokenizer.pickle file or training data was found to rebuild one.")
+
+            with open(tokenizer_path, 'rb') as handle:
                 tokenizer = pickle.load(handle)
             
-            load_model = keras.models.load_model(self.model_trainer_artifacts.trained_model_path)
+            load_model = keras.models.load_model(model_path)
             
             x_test = x_test['tweet'].astype(str)
             
@@ -71,13 +135,15 @@ class ModelEvaluation:
             print(f"------------------{x_test.shape}------------------")
             print(f"------------------{y_test.shape}------------------")
             
-            accuracy = load_model.evaluate(test_sequences_matrix, y_test)
+            accuracy = load_model.evaluate(test_sequences_matrix, y_test, verbose=0)
+            if isinstance(accuracy, (list, tuple)):
+                accuracy = accuracy[1]
             logging.info(f"the test accuracy is {accuracy}")
             lstm_prediction = load_model.predict(test_sequences_matrix)
             res = []
             for prediction in lstm_prediction:
                 if prediction[0] < 0.5:
-                    res.append()
+                    res.append(0)
                 else:
                     res.append(1)
             print(confusion_matrix(y_test, res))
@@ -89,34 +155,26 @@ class ModelEvaluation:
     def initiate_model_evaluation(self) -> ModelEvaluationArtifacts:
         try:
             logging.info("Initiating the model evaluation. Loading currently trained model")
-            trained_model=keras.models.load_model(self.model_trainer_artifacts.trained_model_path)
-            with open('tokenizer.pickle', 'rb') as handle:
-                load_tokenizer = pickle.load(handle)
-            
-            trained_model_accuracy = self.evaluate()
+            trained_model_accuracy = self.evaluate(self.model_trainer_artifacts.trained_model_path)
             
             logging.info("Fetch best model from gcloud storage")
-            best_model_path = self.get_best_model_from_gcloud()
+            best_model_path = self.resolve_best_model_path()
             
-            logging.info("Checking if the best model is present in gcloud")
+            logging.info("Checking if the best model is present in gcloud or locally")
             if os.path.isfile(best_model_path) is False:
                 is_model_accepted = True
-                logging.info("Gcloud model is no longer the best model, the one currently trained is.")
-            
+                logging.info("No best model was available, so the trained model is accepted.")
             else:
-                logging.info("Load best model fetched from gcloud storage")
-                best_model = keras.models.load_model(best_model_path)
-                best_model_accuracy = self.evaluate()
-                
-                logging.info("Comparing loss between best_model_loss and trained_model_loss")
-                if best_model_accuracy > trained_model_accuracy:
-                    is_best_model_accepted = True
-                    logging.info("Trained model not accepted")
-                else:
-                    is_best_model_accepted = False
+                best_model_accuracy = self.evaluate(best_model_path)
+                logging.info("Comparing best_model_accuracy and trained_model_accuracy")
+                if trained_model_accuracy >= best_model_accuracy:
+                    is_model_accepted = True
                     logging.info("Trained model accepted")
-                
-            model_evaluation_artifacts = ModelEvaluationArtifacts(is_model_accepted)
+                else:
+                    is_model_accepted = False
+                    logging.info("Trained model not accepted")
+
+            model_evaluation_artifacts = ModelEvaluationArtifacts(is_model_accepted=is_model_accepted)
             logging.info("Returning the ModelEvaluationArtifacts")
             return model_evaluation_artifacts
         except Exception as e:

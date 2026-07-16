@@ -15,10 +15,13 @@ class ModelPusher:
     def initiate_model_pusher(self) -> ModelPusherArtifacts:
         logging.info("Entered the initiate_model_pusher from ModelPusher class")
         try:
-            self.gcloud.sync_folder_to_gcloud(self.model_pusher_config.BUCKET_NAME,
-                                              self.model_pusher_config.TRAINED_MODEL_PATH,
-                                              self.model_pusher_config.MODEL_NAME)
-            logging.info("Uploaded best model to gcloud storage")
+            try:
+                self.gcloud.sync_folder_to_gcloud(self.model_pusher_config.BUCKET_NAME,
+                                                  self.model_pusher_config.TRAINED_MODEL_PATH,
+                                                  self.model_pusher_config.MODEL_NAME)
+                logging.info("Uploaded best model to gcloud storage")
+            except Exception as sync_error:
+                logging.warning("Skipping model upload because GCS sync failed: %s", sync_error)
             
             #Saving the model pusher artifacts
             model_pusher_artifacts = ModelPusherArtifacts(self.model_pusher_config.BUCKET_NAME)
